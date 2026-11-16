@@ -6,12 +6,12 @@
 
 HANGTAG is a single-page web app. Import an L-Acoustics Soundvision file and it works out:
 
-- **Inventory:** how many boxes of each model are in the design, which hangs use them, which fly bars are needed and how many dollies to prep.
-- **Hangs & angles:** each hang or stack, whether it's flown or ground stacked, the fly bar, which way the fly bar faces, the pickup hole, the site angle, the trim and the splay angle of every box. Each hang also gets a side-view drawing.
+- **Inventory:** how many boxes of each model are in the design, which hangs use them, which fly bars are needed, how many dollies to prep, and how many boxes need each Panflex setting.
+- **Hangs & angles:** each hang or stack, whether it's flown or ground stacked, the fly bar, which way the fly bar faces, the pickup hole, the site angle, the trim, and the splay angle and **Panflex** setting of every box. Each hang also gets a to-scale side-view drawing marked with its **centre of gravity** and approximate weight.
 - **Printout:** a full prep sheet with all of the above, ready to print or save as a PDF.
 - **Dolly labels:** set how many boxes of each model go on a dolly. HANGTAG then prints a label for every dolly showing:
   - which hang it belongs to (e.g. *MAIN L – DOLLY 2/3*)
-  - the box numbers on that dolly and the angle for each box
+  - the box numbers on that dolly, with the angle and Panflex setting for each box
   - the angle linking its top box to the dolly above
   - the fly bar, direction and hole, on the first dolly only
 
@@ -31,3 +31,7 @@ Your current show is remembered in the browser. Use **Save project** and **Open 
 L-Acoustics doesn't publish the Soundvision file format, so HANGTAG reads the file flexibly. It looks for known L-Acoustics model names, plus fields that look like angles, bumpers or fly bars, pickup points, orientation and stacked or flown. Always check the Hangs tab before printing. The **raw data explorer** on the first tab shows everything that was found in the file.
 
 The default boxes-per-dolly numbers are only starting points. Set them to match your own dollies.
+
+## Centre of gravity
+
+The centre of gravity is calculated from each box's height, depth and weight and from the angles in the hang. It includes the boxes only, not the fly bar, motors or cable. The built-in sizes and weights are approximate. Check them against the current L-Acoustics spec sheets and correct them under **Box sizes & weights** on the Hangs tab. For rigging decisions, Soundvision's own mechanical data is the authority.

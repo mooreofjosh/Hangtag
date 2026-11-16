@@ -56,13 +56,16 @@
   .msg.ok{background:#ebfbee;color:#1e6b30;border:1px solid #b2f2bb}
   .msg.warn{background:#fff9db;color:#7a5600;border:1px solid #ffe066}
   .msg.err{background:#fff5f5;color:#a51111;border:1px solid #ffc9c9}
-  .grid-hangs{display:grid;grid-template-columns:repeat(auto-fill,minmax(560px,1fr));gap:16px}
+  .grid-hangs{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,680px),1fr));gap:16px}
   .hang-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
   .hang-head input.name{font-weight:700;font-size:15px;flex:1;min-width:160px}
-  .hang-body{display:grid;grid-template-columns:1fr 170px;gap:14px}
+  .hang-body{display:grid;grid-template-columns:minmax(0,1fr) 180px;gap:14px}
   .hang-body svg{width:100%;height:auto;background:#fafbfc;border:1px solid var(--line);border-radius:8px}
   .boxes td input{width:100%}
   .boxes td input.ang{width:80px}
+  .boxes td input[data-bf=model]{min-width:92px}
+  .boxes td input[data-bf=note]{min-width:80px}
+  .boxes td input.pf{width:118px}
   .muted{color:var(--muted)}
   .small{font-size:12px}
   .kpis{display:flex;gap:12px;flex-wrap:wrap}
@@ -96,6 +99,7 @@
   .label table td,.label table th{padding:4px 6px;border-bottom:1px solid #999;font-size:14px}
   .label table td.ang{font-size:20px;font-weight:800;text-align:right}
   .label table tr.link td{background:#fff0e6}
+  .label table td.pf{font-weight:800;white-space:nowrap}
   .label .l-foot{margin-top:auto;padding-top:6px;font-size:11px;color:#333;display:flex;justify-content:space-between;gap:8px}
   .label .bumper{background:#000;color:#fff;padding:4px 8px;border-radius:4px;font-weight:700;font-size:13px;margin-bottom:6px}
   .label.size-full .l-hang{font-size:48px} .label.size-full .l-dolly{font-size:36px}
@@ -194,6 +198,13 @@
       <span class="small muted">Angles are the splay <b>between each box and the box above it</b> (as in Soundvision). Box 1 = top of the hang (flown) / top of the stack (ground stack).</span>
     </div>
   </div>
+  <div class="panel no-print">
+    <details id="specsBox">
+      <summary><b>Box sizes &amp; weights</b> (used for the drawings and centre of gravity)</summary>
+      <p class="small muted">These are approximate built-in values. Check them against the current L-Acoustics spec sheets and correct them here. Models marked ? have no built-in value and use a placeholder. The CoG covers the boxes only, not the fly bar, motors or cable.</p>
+      <div id="specs"></div>
+    </details>
+  </div>
   <div class="grid-hangs" id="hangs"></div>
 </section>
 
@@ -284,6 +295,7 @@ const blankState = () => ({
   project:{name:'',venue:'',date:new Date().toISOString().slice(0,10),by:'',notes:'',source:''},
   hangs:[],
   dolly:{perModel:{},labelSize:'quarter',groundOrder:'top',filter:''},
+  specs:{},
   report:{diagram:true,dolly:true,cumul:true}
 });
 let state = load() || blankState();
@@ -461,8 +473,10 @@ function interpret(tree){
       const cnt = num((pick(b.props,/^(count|quantity|qty|number|nb|nbelements|numberofelements|elementcount)$/i)||{}).v);
       const ang = pick(b.props,/(inter|splay|relative|elem|enclosure|rig)?angle$|^angle|splay|^ang$/i,/site|tilt|azimuth|pan|rotation|vertical(?!.*splay)|horizontal|absolute|aim|dispersion|coverage|opening/i);
       const abs = pick(b.props,/site|absolute|tilt|aim/i,/azimuth|pan/i);
+      const pfp = pick(b.props,/panflex|directivity|horiz(ontal)?.?(coverage|dispersion|config|directivity|opening|setting)|^fins?$|coverage|dispersion/i);
+      const panflex = pfp? normPanflex(pfp.v) : '';
       const times = (cnt && cnt>1 && cnt<64) ? cnt : 1;
-      for(let i=0;i<times;i++) h.boxes.push({model, angle: ang? num(ang.v) : null, abs: abs? num(abs.v):null, note:''});
+      for(let i=0;i<times;i++) h.boxes.push({model, angle: ang? num(ang.v) : null, abs: abs? num(abs.v):null, panflex, note:''});
     }
 
     // Bumper / fly bar
@@ -500,6 +514,9 @@ function interpret(tree){
 
     const site=pick(bag,/site|tilt|bumper.?angle|frame.?angle/i,/azimuth|pan/i);
     if(site) h.site=num(site.v);
+    // hang-level Panflex setting → apply to boxes that support it and have none
+    const hpf=pick(bag,/panflex|horiz(ontal)?.?(directivity|coverage|dispersion)/i);
+    if(hpf){ const v=normPanflex(hpf.v); if(v) h.boxes.forEach(b=>{ if(!b.panflex && supportsPF(b.model)) b.panflex=v; }); }
     const trim=pick(bag,/trim|height|elevation|^z$|position.?z|\.z$/i);
     if(trim && num(trim.v)!=null) h.trim=num(trim.v);
     // first box angle: in Soundvision box 1's angle is to the bumper — keep it, label it in UI
@@ -557,6 +574,19 @@ function inventory(){
   }
   return {boxes,rig};
 }
+function pfTable(){
+  const m=new Map();
+  for(const h of state.hangs) for(const b of h.boxes){
+    if(!b.panflex && !supportsPF(b.model)) continue;
+    const k=b.model+'|'+(b.panflex||'');
+    if(!m.has(k)) m.set(k,{model:b.model,pf:b.panflex||'',q:0,hangs:{}});
+    const r=m.get(k); r.q++; r.hangs[h.name]=(r.hangs[h.name]||0)+1;
+  }
+  const rows=[...m.values()];
+  if(!rows.some(r=>r.pf)) return [];
+  rows.forEach(r=>r.where=Object.entries(r.hangs).map(([n,q])=>esc(n)+' ×'+q).join(', '));
+  return rows.sort((a,b)=>a.model.localeCompare(b.model)||a.pf.localeCompare(b.pf,undefined,{numeric:true}));
+}
 function perDolly(model){
   const v = state.dolly.perModel[model];
   if(v>0) return v;
@@ -581,6 +611,31 @@ function dolliesFor(h){
 //  RENDERING
 // =====================================================================
 const LOGO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="hgX" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff9a4d"/><stop offset="1" stop-color="#e8420a"/></linearGradient></defs><path d="M32 2.5 L55 16 V57 a4.5 4.5 0 0 1 -4.5 4.5 H13.5 A4.5 4.5 0 0 1 9 57 V16 Z" fill="url(#hgX)"/><circle cx="32" cy="12.5" r="3.6" fill="#1b1f24"/><circle cx="32" cy="12.5" r="1.5" fill="#ffd2b3"/><rect x="20.5" y="19" width="25" height="2" rx="1" fill="#1b1f24"/><polygon points="23.0,21.6 23.0,26.6 43.0,26.6 43.0,21.6" fill="#1b1f24" stroke="#fff" stroke-width="0.8" stroke-linejoin="round"/><line x1="41.3" y1="22.7" x2="41.3" y2="25.5" stroke="#ff9a4d" stroke-width="1.2" stroke-linecap="round"/><polygon points="23.0,26.6 22.9,31.6 42.9,31.9 43.0,26.9" fill="#1b1f24" stroke="#fff" stroke-width="0.8" stroke-linejoin="round"/><line x1="41.3" y1="28.0" x2="41.2" y2="30.8" stroke="#ff9a4d" stroke-width="1.2" stroke-linecap="round"/><polygon points="22.9,31.6 22.6,36.6 42.6,37.8 42.9,32.8" fill="#1b1f24" stroke="#fff" stroke-width="0.8" stroke-linejoin="round"/><line x1="41.1" y1="33.8" x2="40.9" y2="36.6" stroke="#ff9a4d" stroke-width="1.2" stroke-linecap="round"/><polygon points="22.6,36.6 21.9,41.5 41.6,44.5 42.4,39.5" fill="#1b1f24" stroke="#fff" stroke-width="0.8" stroke-linejoin="round"/><line x1="40.5" y1="40.4" x2="40.1" y2="43.2" stroke="#ff9a4d" stroke-width="1.2" stroke-linecap="round"/><polygon points="21.9,41.5 20.4,46.3 39.6,52.0 41.0,47.2" fill="#1b1f24" stroke="#fff" stroke-width="0.8" stroke-linejoin="round"/><line x1="39.1" y1="47.8" x2="38.3" y2="50.5" stroke="#ff9a4d" stroke-width="1.2" stroke-linecap="round"/><polygon points="20.4,46.3 18.1,50.8 35.9,60.0 38.2,55.6" fill="#1b1f24" stroke="#fff" stroke-width="0.8" stroke-linejoin="round"/><line x1="36.2" y1="55.8" x2="34.9" y2="58.2" stroke="#ff9a4d" stroke-width="1.2" stroke-linecap="round"/></svg>';
+// ---------- Panflex (adjustable horizontal directivity) ----------
+const PF_MODELS=['K2','K3','K3I','KARAII','KARAIII'];
+const supportsPF = m => PF_MODELS.includes(norm(m));
+const PF_OPTIONS=['70°','110°','90° (35L/55R)','90° (55L/35R)'];
+function normPanflex(v){
+  if(v==null) return '';
+  const s=String(v).trim(); if(!s || /^(true|false|none|null|n\/a|-)$/i.test(s)) return '';
+  const t=s.replace(/deg(rees)?|°/gi,'').trim();
+  const m=t.match(/(\d{2,3})\s*[\/\-:|]\s*(\d{2,3})/);
+  if(m){ const a=+m[1], b=+m[2];
+    if(a===b) return (a+b)+'°';
+    if(a+b===90) return `90° (${a}L/${b}R)`;
+    if(a+b===70||a+b===110) return (a+b)+'°';
+  }
+  if(/narrow/i.test(t)) return '70°';
+  if(/wide/i.test(t)) return '110°';
+  const n=num(t);
+  if(n===70||n===110) return n+'°';
+  if(n===90||/asym/i.test(t)){ if(/left|\bL\b/i.test(t)) return '90° (55L/35R)'; if(/right|\bR\b/i.test(t)) return '90° (35L/55R)'; return '90° asym'; }
+  return s.length<=16? s : '';
+}
+function pfSummary(boxes){
+  const c={}; boxes.forEach(b=>{ if(b.panflex) c[b.panflex]=(c[b.panflex]||0)+1; });
+  return Object.entries(c).map(([k,q])=>q+'× '+k).join(', ');
+}
 const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmtA = a => (a==null||a==='')?'—':(Math.round(a*100)/100)+'°';
 const mountChip = m => m==='flown'?'<span class="chip flown">FLOWN</span>':m==='ground'?'<span class="chip ground">GROUND STACK</span>':'<span class="chip unk">MOUNT ?</span>';
@@ -610,6 +665,12 @@ function renderInventory(){
     html+=`<tr><td><b>${esc(m)}</b></td><td class="num"><b>${q}</b></td><td class="small">${where}</td><td class="num">${perDolly(m)}</td><td class="num">${d}</td></tr>`;
   }
   html+='</tbody></table>';
+  const pfRows=pfTable();
+  if(pfRows.length){
+    html+='<h3 style="margin-top:14px">Panflex settings to prep</h3><table><thead><tr><th>Model</th><th>Panflex</th><th class="num">Qty</th><th>Used in</th></tr></thead><tbody>';
+    for(const r of pfRows) html+=`<tr><td><b>${esc(r.model)}</b></td><td><b>${esc(r.pf||'not set')}</b></td><td class="num">${r.q}</td><td class="small">${r.where}</td></tr>`;
+    html+='</tbody></table>';
+  }
   if(Object.keys(rig).length){
     html+='<h3 style="margin-top:14px">Fly bars / bumpers</h3><table><thead><tr><th>Item</th><th class="num">Qty</th><th>Used in</th></tr></thead><tbody>';
     for(const [m,q] of Object.entries(rig)) html+=`<tr><td><b>${esc(m)}</b></td><td class="num">${q}</td><td class="small">${state.hangs.filter(h=>h.bumper===m).map(h=>esc(h.name)).join(', ')}</td></tr>`;
@@ -619,48 +680,106 @@ function renderInventory(){
 }
 
 // ---------- side-view SVG of a hang ----------
+// ---------- Box sizes & weights (approximate — always editable on the Hangs tab) ----------
+// h = box height, d = box depth (mm), kg = weight. Check against the current L-Acoustics spec sheets.
+const SPEC_DEFAULTS={
+  'K1':{h:444,d:560,kg:106}, 'K1-SB':{h:444,d:560,kg:83}, 'K2':{h:352,d:520,kg:56}, 'K3':{h:337,d:480,kg:43},
+  'KARA II':{h:250,d:485,kg:26}, 'KARA':{h:250,d:485,kg:26}, 'KIVA II':{h:225,d:410,kg:14}, 'KIVA':{h:225,d:325,kg:13},
+  'KS28':{h:550,d:700,kg:79}, 'KS21':{h:550,d:650,kg:49}, 'SB28':{h:550,d:700,kg:93}, 'SB18':{h:500,d:700,kg:52},
+  'A15 Wide':{h:410,d:480,kg:33}, 'A15 Focus':{h:410,d:480,kg:33}, 'A15':{h:410,d:480,kg:33},
+  'A10 Wide':{h:270,d:380,kg:18}, 'A10 Focus':{h:270,d:380,kg:18}, 'A10':{h:270,d:380,kg:18}
+};
+const SPEC_FALLBACK={h:350,d:500,kg:50};
+function specOf(model){
+  const o=(state.specs||{})[model];
+  const d=SPEC_DEFAULTS[model]||SPEC_DEFAULTS[prettyModel(model)];
+  const base=d||SPEC_FALLBACK;
+  return {h:(o&&o.h>0)?o.h:base.h, d:(o&&o.d>0)?o.d:base.d, kg:(o&&o.kg>0)?o.kg:base.kg, known:!!(d||(o&&o.kg>0))};
+}
+
+// Geometry in metres. Origin = rear top corner of box 1; x forward (toward audience), y down.
+function hangGeom(h){
+  let ang=(num(h.site)||0), fx=0, fy=0;
+  const polys=[]; let sx=0, sy=0, kg=0; const unknown=new Set();
+  h.boxes.forEach((b,i)=>{
+    const a=num(b.angle); if(i>0||a!=null) ang+=(a||0);
+    const r=ang*Math.PI/180, sp=specOf(b.model), bh=sp.h/1000, bd=sp.d/1000;
+    if(!sp.known) unknown.add(b.model);
+    const dx=-Math.sin(r), dy=Math.cos(r), vx=Math.cos(r), vy=Math.sin(r);
+    // chain along the back edge (hinge at rear) so the splay opens at the front
+    const b1=[fx,fy], b2=[fx+dx*bh,fy+dy*bh], f2=[b2[0]+vx*bd,b2[1]+vy*bd], f1=[fx+vx*bd,fy+vy*bd];
+    const c=[(b1[0]+b2[0]+f1[0]+f2[0])/4,(b1[1]+b2[1]+f1[1]+f2[1])/4];
+    polys.push({p:[f1,f2,b2,b1],i,ang,c,kg:sp.kg});
+    sx+=c[0]*sp.kg; sy+=c[1]*sp.kg; kg+=sp.kg;
+    fx=b2[0]; fy=b2[1];
+  });
+  const xs=polys.flatMap(q=>q.p.map(p=>p[0])), ys=polys.flatMap(q=>q.p.map(p=>p[1]));
+  const box={minX:Math.min(0,...xs),maxX:Math.max(0,...xs),minY:Math.min(0,...ys),maxY:Math.max(0,...ys)};
+  const cog=kg?[sx/kg,sy/kg]:[0,0];
+  const top=polys[0];
+  return {polys,box,kg,cog,unknown:[...unknown],
+    // CoG relative to the top box: + = behind its front face / below its top; ground: height above floor
+    cogBehindFront: top? top.p[0][0]-cog[0] : 0,
+    cogFromRear: cog[0],
+    cogBelowTop: cog[1]-box.minY,
+    cogAboveFloor: box.maxY-cog[1],
+    height: box.maxY-box.minY};
+}
+const fmtM = v => (Math.round(v*100)/100).toFixed(2)+' m';
+function cogText(h,g){
+  if(!g||!g.kg) return '—';
+  const v = h.mount==='ground' ? `${fmtM(g.cogAboveFloor)} above floor` : `${fmtM(g.cogBelowTop)} below top of box 1`;
+  return `${fmtM(g.cogFromRear)} forward of box 1 rear · ${v}`;
+}
+
 function hangSVG(h, w=170){
   const n=h.boxes.length; if(!n) return '';
-  const bw=60, bh=Math.max(14,Math.min(28,360/n));
-  let ang=(num(h.site)||0); // degrees, positive = down tilt
-  const ground=h.mount==='ground';
-  // compute box polygons; hinge at front edge
-  let fx=0, fy=0; const polys=[]; let minX=0,maxX=0,minY=0,maxY=0;
-  const pts=[];
-  // bumper
-  const order=h.boxes;
-  for(let i=0;i<n;i++){
-    const a=num(order[i].angle); if(i>0||a!=null) ang+= (a||0);
-    const r=ang*Math.PI/180;
-    // box: front edge from (fx,fy) downwards along direction rotated by r; depth backwards
-    const dx=-Math.sin(r), dy=Math.cos(r);         // down vector (rotated)
-    const vx=Math.cos(r), vy=Math.sin(r);          // forward vector: front dips as angle grows
-    // chain along the back edge (hinge at rear) so the splay opens at the front
-    const b1=[fx,fy], b2=[fx+dx*bh,fy+dy*bh], f2=[b2[0]+vx*bw,b2[1]+vy*bw], f1=[fx+vx*bw,fy+vy*bw];
-    const p1=f1,p2=f2,p3=b2,p4=b1;
-    polys.push({p:[p1,p2,p3,p4],i,ang});
-    [p1,p2,p3,p4].forEach(p=>{minX=Math.min(minX,p[0]);maxX=Math.max(maxX,p[0]);minY=Math.min(minY,p[1]);maxY=Math.max(maxY,p[1]);});
-    fx=b2[0]; fy=b2[1];
-  }
-  const pad=22; const W=maxX-minX+pad*2+40, H=maxY-minY+pad*2+10;
+  const g=hangGeom(h), ground=h.mount==='ground';
+  const S=Math.max(40,Math.min(160, 360/Math.max(g.height,0.3)));   // px per metre
+  const P=([x,y])=>[x*S,y*S];
+  const minX=g.box.minX*S, maxX=g.box.maxX*S, minY=g.box.minY*S, maxY=g.box.maxY*S;
+  const pad=22; const W=maxX-minX+pad*2+50, H=maxY-minY+pad*2+16;
   const tx=-minX+pad, ty=-minY+pad;
-  let s=`<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="max-width:${w}px">`;
-  if(!ground) s+=`<rect x="${tx-6}" y="${ty-8}" width="${bw+12}" height="6" fill="#333"/><line x1="${tx+bw/2+(h.orientation&&/rev/i.test(h.orientation)?-12:12)}" y1="${ty-8}" x2="${tx+bw/2+(h.orientation&&/rev/i.test(h.orientation)?-12:12)}" y2="2" stroke="#d9480f" stroke-width="2"/>`;
-  polys.forEach(({p,i})=>{
-    s+=`<polygon points="${p.map(q=>(q[0]+tx).toFixed(1)+','+(q[1]+ty).toFixed(1)).join(' ')}" fill="${i%2?'#495057':'#343a40'}" stroke="#fff" stroke-width="1"/>`;
-    const c=[(p[0][0]+p[1][0])/2+tx+4,(p[0][1]+p[1][1])/2+ty+4];
-    s+=`<text x="${c[0].toFixed(1)}" y="${c[1].toFixed(1)}" font-size="${Math.min(12,bh*.6)}" fill="#d9480f" font-family="sans-serif">${fmtA(h.boxes[i].angle)}</text>`;
+  const T=([x,y])=>[(x+tx).toFixed(1),(y+ty).toFixed(1)];
+  const topD=g.polys[0].p[0][0]*S;
+  let s=`<svg viewBox="0 0 ${W.toFixed(0)} ${H.toFixed(0)}" xmlns="http://www.w3.org/2000/svg" style="max-width:${w}px">`;
+  if(!ground){ const px=tx+topD/2+(h.orientation&&/rev/i.test(h.orientation)?-12:12);
+    s+=`<rect x="${tx-6}" y="${ty-8}" width="${topD+12}" height="6" fill="#333"/><line x1="${px}" y1="${ty-8}" x2="${px}" y2="2" stroke="#d9480f" stroke-width="2"/>`; }
+  g.polys.forEach(({p,i})=>{
+    const q=p.map(P);
+    s+=`<polygon points="${q.map(v=>T(v).join(',')).join(' ')}" fill="${i%2?'#495057':'#343a40'}" stroke="#fff" stroke-width="1"/>`;
+    const c=T([(q[0][0]+q[1][0])/2+4,(q[0][1]+q[1][1])/2+4]);
+    const bh=Math.hypot(q[1][0]-q[0][0],q[1][1]-q[0][1]);
+    s+=`<text x="${c[0]}" y="${c[1]}" font-size="${Math.max(7,Math.min(12,bh*.6)).toFixed(1)}" fill="#d9480f" font-family="sans-serif">${fmtA(h.boxes[i].angle)}</text>`;
   });
   if(ground) s+=`<line x1="${minX+tx-10}" y1="${maxY+ty+3}" x2="${maxX+tx+40}" y2="${maxY+ty+3}" stroke="#7f5f01" stroke-width="3"/>`;
+  // centre of gravity: plumb line + CoG symbol
+  if(g.kg){
+    const [cx,cy]=T(P(g.cog)), r=7;
+    s+=`<line x1="${cx}" y1="${(minY+ty-10).toFixed(1)}" x2="${cx}" y2="${(maxY+ty+8).toFixed(1)}" stroke="#1971c2" stroke-width="1.2" stroke-dasharray="4 3"/>`;
+    s+=`<g><circle cx="${cx}" cy="${cy}" r="${r}" fill="#fff" stroke="#1971c2" stroke-width="1.6"/>`+
+       `<path d="M${cx} ${cy} L${cx} ${(cy-r).toFixed(1)} A${r} ${r} 0 0 1 ${(+cx+r).toFixed(1)} ${cy} Z M${cx} ${cy} L${cx} ${(+cy+r).toFixed(1)} A${r} ${r} 0 0 1 ${(cx-r).toFixed(1)} ${cy} Z" fill="#1971c2"/></g>`;
+    s+=`<text x="${(+cx+r+3).toFixed(1)}" y="${(+cy+4).toFixed(1)}" font-size="11" font-weight="800" fill="#1971c2" stroke="#fff" stroke-width="3" paint-order="stroke" font-family="sans-serif">CoG</text>`;
+    s+=`<text x="${(minX+tx).toFixed(1)}" y="${(H-4).toFixed(1)}" font-size="10" fill="#1971c2" font-family="sans-serif">≈ ${Math.round(g.kg)} kg${g.unknown.length?' (?)':''}</text>`;
+  }
   s+=`<text x="${maxX+tx-8}" y="${ty-12}" font-size="10" fill="#868e96" font-family="sans-serif">FRONT →</text>`;
   return s+'</svg>';
 }
 
+function renderSpecs(){
+  const models=[...new Set(state.hangs.flatMap(h=>h.boxes.map(b=>b.model)))];
+  document.getElementById('specs').innerHTML = models.length ? '<table><thead><tr><th>Model</th><th>Height (mm)</th><th>Depth (mm)</th><th>Weight (kg)</th><th></th></tr></thead><tbody>'+
+    models.map(m=>{const sp=specOf(m);return `<tr><td><b>${esc(m)}</b>${sp.known?'':' <span class="chip unk">?</span>'}</td>
+      <td><input type="number" data-spec="h" data-m="${esc(m)}" value="${sp.h}"></td><td><input type="number" data-spec="d" data-m="${esc(m)}" value="${sp.d}"></td>
+      <td><input type="number" step="0.5" data-spec="kg" data-m="${esc(m)}" value="${sp.kg}"></td>
+      <td>${(state.specs||{})[m]?`<button class="btn small" data-specreset="${esc(m)}">Reset</button>`:''}</td></tr>`;}).join('')+'</tbody></table>' : '<span class="muted">Load some PA first.</span>';
+}
 function renderHangs(){
+  renderSpecs();
   const el=document.getElementById('hangs');
   if(!state.hangs.length){ el.innerHTML='<div class="panel muted">No hangs yet. Import a file or click “+ Add hang”.</div>'; return; }
   const models=[...new Set([...state.hangs.flatMap(h=>h.boxes.map(b=>b.model)),'K1','K2','K3','KARA II','KIVA II','KS28','KS21','A15 Wide','A15 Focus','A10 Wide','A10 Focus','L2','L2D','SYVA','X15','X12','X8'])];
-  el.innerHTML = `<datalist id="modelList">${models.map(m=>`<option value="${esc(m)}">`).join('')}</datalist>` + state.hangs.map((h,hi)=>{
+  el.innerHTML = `<datalist id="pfList">${PF_OPTIONS.map(o=>`<option value="${o}">`).join('')}</datalist><datalist id="modelList">${models.map(m=>`<option value="${esc(m)}">`).join('')}</datalist>` + state.hangs.map((h,hi)=>{
     const total=h.boxes.reduce((a,b)=>a+(num(b.angle)||0),0);
     return `<div class="panel" data-h="${hi}">
       <div class="hang-head">
@@ -682,14 +801,18 @@ function renderHangs(){
         <label class="f">Pickup hole<input data-f="hole" value="${esc(h.hole)}" size="5" placeholder="e.g. 7"></label>
         <label class="f">Site / tilt °<input data-f="site" type="number" step="0.1" value="${esc(h.site)}"></label>
         <label class="f">Trim (m)<input data-f="trim" type="number" step="0.01" value="${esc(h.trim)}"></label>
+        <label class="f">Panflex – all boxes<select data-f="pfAll">
+          <option value="">${pfSummary(h.boxes)? 'Current: '+esc(pfSummary(h.boxes)) : 'Set all…'}</option>
+          ${PF_OPTIONS.map(o=>`<option value="${o}">${o}</option>`).join('')}<option value="__clear">Clear</option></select></label>
       </div>
       <div class="hang-body">
         <div>
-          <table class="boxes"><thead><tr><th style="width:38px">#</th><th>Model</th><th>Angle °</th><th>Note</th><th></th></tr></thead><tbody>
+          <table class="boxes"><thead><tr><th style="width:38px">#</th><th>Model</th><th>Angle °</th><th>Panflex</th><th>Note</th><th></th></tr></thead><tbody>
           ${h.boxes.map((b,bi)=>`<tr data-b="${bi}">
             <td><b>${bi+1}</b></td>
             <td><input list="modelList" data-bf="model" value="${esc(b.model)}"></td>
             <td><input class="ang" type="number" step="0.25" data-bf="angle" value="${b.angle==null?'':b.angle}" title="${bi===0?'Box 1: angle to bumper (usually 0)':'Splay to box above'}"></td>
+            <td><input class="pf" list="pfList" data-bf="panflex" value="${esc(b.panflex||'')}" placeholder="${supportsPF(b.model)?'set':'n/a'}"></td>
             <td><input data-bf="note" value="${esc(b.note)}"></td>
             <td><button class="btn small danger" data-bact="del">×</button></td></tr>`).join('')}
           </tbody></table>
@@ -699,7 +822,7 @@ function renderHangs(){
           </div>
           <label class="f" style="margin-top:8px">Hang notes<input data-f="notes" value="${esc(h.notes)}"></label>
         </div>
-        <div>${hangSVG(h)}</div>
+        <div>${hangSVG(h)}<div class="small" style="color:#1971c2;margin-top:4px"><b>CoG</b> ${cogText(h,hangGeom(h))}</div></div>
       </div>
     </div>`;}).join('');
 }
@@ -714,24 +837,32 @@ function renderReport(){
   for(const [m,q] of Object.entries(boxes)) h+=`<tr><td>${esc(m)}</td><td class="num"><b>${q}</b></td><td class="num">${state.hangs.reduce((a,x)=>a+dolliesFor(x).filter(d=>d.model===m).length,0)}</td></tr>`;
   for(const [m,q] of Object.entries(rig)) h+=`<tr><td>${esc(m)} <span class="muted small">(rigging)</span></td><td class="num"><b>${q}</b></td><td></td></tr>`;
   h+='</tbody></table>';
-  h+='<h3 style="margin-top:16px">Hang summary</h3><table><thead><tr><th>Hang</th><th>Mount</th><th>Boxes</th><th>Fly bar</th><th>Direction</th><th>Hole</th><th class="num">Site</th><th class="num">Trim</th></tr></thead><tbody>';
+  const pfr=pfTable();
+  if(pfr.length){
+    h+='<h3 style="margin-top:16px">Panflex settings</h3><table><thead><tr><th>Model</th><th>Panflex</th><th class="num">Qty</th><th>Used in</th></tr></thead><tbody>';
+    for(const r of pfr) h+=`<tr><td>${esc(r.model)}</td><td><b>${esc(r.pf||'not set')}</b></td><td class="num"><b>${r.q}</b></td><td class="small">${r.where}</td></tr>`;
+    h+='</tbody></table>';
+  }
+  h+='<h3 style="margin-top:16px">Hang summary</h3><table><thead><tr><th>Hang</th><th>Mount</th><th>Boxes</th><th>Fly bar</th><th>Direction</th><th>Hole</th><th>Panflex</th><th class="num">Site</th><th class="num">Trim</th></tr></thead><tbody>';
   for(const x of state.hangs){
     const mix=Object.entries(x.boxes.reduce((a,b)=>(a[b.model]=(a[b.model]||0)+1,a),{})).map(([m,q])=>q+'× '+m).join(', ');
-    h+=`<tr><td><b>${esc(x.name)}</b></td><td>${x.mount==='flown'?'Flown':x.mount==='ground'?'Ground stack':'?'}</td><td>${esc(mix)}</td><td>${esc(x.bumper)||'—'}</td><td>${esc(x.orientation)||'—'}</td><td><b>${esc(x.hole)||'—'}</b></td><td class="num">${fmtA(x.site)}</td><td class="num">${x.trim!==''&&x.trim!=null?esc(x.trim)+' m':'—'}</td></tr>`;
+    h+=`<tr><td><b>${esc(x.name)}</b></td><td>${x.mount==='flown'?'Flown':x.mount==='ground'?'Ground stack':'?'}</td><td>${esc(mix)}</td><td>${esc(x.bumper)||'—'}</td><td>${esc(x.orientation)||'—'}</td><td><b>${esc(x.hole)||'—'}</b></td><td class="small">${esc(pfSummary(x.boxes))||'—'}</td><td class="num">${fmtA(x.site)}</td><td class="num">${x.trim!==''&&x.trim!=null?esc(x.trim)+' m':'—'}</td></tr>`;
   }
   h+='</tbody></table>';
   for(const x of state.hangs){
     const ds=dolliesFor(x);
     const dollyOf={}; ds.forEach((d,i)=>d.boxes.forEach(b=>dollyOf[b.pos]=i+1));
     let cum=num(x.site)||0;
+    const hasPF=x.boxes.some(b=>b.panflex);
     h+=`<div class="r-hang"><h2 style="margin:0 0 8px">${esc(x.name)} ${mountChip(x.mount)}</h2>
       <div class="r-specs">
         <div><b>Fly bar</b>${esc(x.bumper)||'—'}</div><div><b>Direction</b>${esc(x.orientation)||'—'}</div>
         <div><b>Pickup hole</b>${esc(x.hole)||'—'}</div><div><b>Site / Trim</b>${fmtA(x.site)} / ${x.trim!==''&&x.trim!=null?esc(x.trim)+' m':'—'}</div>
+        <div style="grid-column:1/-1;color:#1971c2"><b style="color:#1971c2">Centre of gravity (boxes only, ≈ ${Math.round(hangGeom(x).kg)} kg${hangGeom(x).unknown.length?', some weights unknown':''})</b>${cogText(x,hangGeom(x))}</div>
       </div>
       <div class="r-hang-grid" style="${o.diagram?'':'grid-template-columns:1fr'}"><div>
-      <table><thead><tr><th>#</th><th>Model</th><th class="num">Angle</th>${o.cumul?'<th class="num">Cumul.</th>':''}${o.dolly?'<th class="num">Dolly</th>':''}<th>Note</th></tr></thead><tbody>
-      ${x.boxes.map((b,i)=>{cum+=num(b.angle)||0;return `<tr><td>${i+1}</td><td>${esc(b.model)}</td><td class="num"><b>${fmtA(b.angle)}</b></td>${o.cumul?`<td class="num">${fmtA(cum)}</td>`:''}${o.dolly?`<td class="num">${dollyOf[i+1]}</td>`:''}<td>${esc(b.note)}</td></tr>`}).join('')}
+      <table><thead><tr><th>#</th><th>Model</th><th class="num">Angle</th>${hasPF?'<th>Panflex</th>':''}${o.cumul?'<th class="num">Cumul.</th>':''}${o.dolly?'<th class="num">Dolly</th>':''}<th>Note</th></tr></thead><tbody>
+      ${x.boxes.map((b,i)=>{cum+=num(b.angle)||0;return `<tr><td>${i+1}</td><td>${esc(b.model)}</td><td class="num"><b>${fmtA(b.angle)}</b></td>${hasPF?`<td><b>${esc(b.panflex)||'—'}</b></td>`:''}${o.cumul?`<td class="num">${fmtA(cum)}</td>`:''}${o.dolly?`<td class="num">${dollyOf[i+1]}</td>`:''}<td>${esc(b.note)}</td></tr>`}).join('')}
       </tbody></table>${x.notes?`<p><b>Notes:</b> ${esc(x.notes)}</p>`:''}</div>
       ${o.diagram?`<div>${hangSVG(x,180)}</div>`:''}</div></div>`;
   }
@@ -754,9 +885,10 @@ function renderDolly(){
     ds.forEach((dl,i)=>{
       const first=dl.boxes[0];
       const isTop = first.pos===1;
+      const dPF=dl.boxes.some(b=>b.panflex);
       const rows=dl.boxes.map((b,j)=>{
         const link = j===0 && b.pos>1;
-        return `<tr class="${link?'link':''}"><td>Box ${b.pos}</td><td>${esc(b.model)}</td><td class="small">${link?'↑ to box '+(b.pos-1)+' (prev. dolly)':b.pos===1?(h.mount==='ground'?(h.bumper?'to base':'top box'):'to fly bar'):'to box '+(b.pos-1)}</td><td class="ang">${fmtA(b.angle)}</td></tr>`;
+        return `<tr class="${link?'link':''}"><td>Box ${b.pos}</td><td>${esc(b.model)}</td><td class="small">${link?'↑ to box '+(b.pos-1)+' (prev. dolly)':b.pos===1?(h.mount==='ground'?(h.bumper?'to base':'top box'):'to fly bar'):'to box '+(b.pos-1)}</td>${dPF?`<td class="pf">${b.panflex?'PF '+esc(b.panflex):'—'}</td>`:''}<td class="ang">${fmtA(b.angle)}</td></tr>`;
       }).join('');
       out+=`<div class="label size-${d.labelSize}">
         <div class="l-top"><div class="l-hang">${esc(h.name)}</div><div class="l-dolly">DOLLY ${i+1}/${ds.length}</div></div>
@@ -803,16 +935,21 @@ rawSearch.oninput=renderRaw;
 
 btnDemo.onclick=()=>{ state.hangs=demoHangs(); state.project.name=state.project.name||'Demo Show'; state.project.source='demo'; save(); renderAll(); importMsg.innerHTML='<div class="msg ok">Demo show loaded.</div>'; };
 btnClear.onclick=()=>{ if(!armed(btnClear,'Click again to clear')) return; state=blankState(); rawText=''; renderRaw(); save(); renderAll(); importMsg.innerHTML=''; flash('Cleared.'); };
-btnNewHang.onclick=btnAddHang.onclick=()=>{ const h=newHang('Hang '+(state.hangs.length+1)); h.boxes.push({model:'K2',angle:0,note:''}); state.hangs.push(h); save(); renderAll(); document.querySelector('#tabs [data-tab=hangs]').click(); };
+btnNewHang.onclick=btnAddHang.onclick=()=>{ const h=newHang('Hang '+(state.hangs.length+1)); h.boxes.push({model:'K2',angle:0,panflex:'',note:''}); state.hangs.push(h); save(); renderAll(); document.querySelector('#tabs [data-tab=hangs]').click(); };
 
 // Hang editor (delegated)
 const hangsEl=document.getElementById('hangs');
 hangsEl.addEventListener('change',e=>{
   const card=e.target.closest('[data-h]'); if(!card) return;
   const h=state.hangs[+card.dataset.h];
-  if(e.target.dataset.f){ const f=e.target.dataset.f; h[f]=(f==='site'||f==='trim')?(e.target.value===''?'':parseFloat(e.target.value)):e.target.value; }
+  if(e.target.dataset.f==='pfAll'){
+    const v=e.target.value==='__clear'?'':e.target.value;
+    const anyPF=h.boxes.some(b=>supportsPF(b.model));
+    h.boxes.forEach(b=>{ if(!anyPF || supportsPF(b.model)) b.panflex=v; });
+  }
+  else if(e.target.dataset.f){ const f=e.target.dataset.f; h[f]=(f==='site'||f==='trim')?(e.target.value===''?'':parseFloat(e.target.value)):e.target.value; }
   const row=e.target.closest('[data-b]');
-  if(row && e.target.dataset.bf){ const b=h.boxes[+row.dataset.b], f=e.target.dataset.bf; b[f]= f==='angle'? (e.target.value===''?null:parseFloat(e.target.value)) : (f==='model'? (matchModel(e.target.value)||e.target.value) : e.target.value); }
+  if(row && e.target.dataset.bf){ const b=h.boxes[+row.dataset.b], f=e.target.dataset.bf; b[f]= f==='panflex'? normPanflex(e.target.value) : f==='angle'? (e.target.value===''?null:parseFloat(e.target.value)) : (f==='model'? (matchModel(e.target.value)||e.target.value) : e.target.value); }
   save(); renderAll();
 });
 hangsEl.addEventListener('click',e=>{
@@ -823,12 +960,21 @@ hangsEl.addEventListener('click',e=>{
   else if(a==='dup'){ const c=JSON.parse(JSON.stringify(h)); c.id=uid(); c.name=h.name+' (copy)'; state.hangs.splice(i+1,0,c); }
   else if(a==='up' && i>0) [state.hangs[i-1],state.hangs[i]]=[state.hangs[i],state.hangs[i-1]];
   else if(a==='down' && i<state.hangs.length-1) [state.hangs[i+1],state.hangs[i]]=[state.hangs[i],state.hangs[i+1]];
-  else if(a==='addbox'){ const last=h.boxes[h.boxes.length-1]; h.boxes.push({model:last?last.model:'K2',angle:last?last.angle:0,note:''}); }
+  else if(a==='addbox'){ const last=h.boxes[h.boxes.length-1]; h.boxes.push({model:last?last.model:'K2',angle:last?last.angle:0,panflex:last?(last.panflex||''):'',note:''}); }
   else if(ba==='del'){ h.boxes.splice(+e.target.closest('[data-b]').dataset.b,1); }
   else return;
   save(); renderAll();
 });
 
+// Box specs editor
+document.getElementById('specs').addEventListener('change',e=>{
+  const f=e.target.dataset.spec, m=e.target.dataset.m; if(!f) return;
+  state.specs=state.specs||{}; state.specs[m]=Object.assign({},state.specs[m]); state.specs[m][f]=parseFloat(e.target.value)||0;
+  save(); setTimeout(renderAll,0);
+});
+document.getElementById('specs').addEventListener('click',e=>{
+  const m=e.target.dataset.specreset; if(!m) return; delete state.specs[m]; save(); renderAll();
+});
 // Report options
 [['rIncDiagram','diagram'],['rIncDolly','dolly'],['rIncCumul','cumul']].forEach(([id,k])=>document.getElementById(id).onchange=e=>{state.report[k]=e.target.checked;save();renderReport();});
 // Dolly options
@@ -889,6 +1035,8 @@ function demoHangs(){
   const SL=mk('Sub Stack L','ground','','','',0,'','KS28',[0,0,0,0]);
   const SR=mk('Sub Stack R','ground','','','',0,'','KS28',[0,0,0,0]);
   const FF=mk('Front Fill C','ground','KIBU II','Normal (front)','',0,'','KIVA II',[0,4]);
+  [L,R].forEach(h=>h.boxes.forEach((b,i)=>b.panflex=i<6?'70°':'110°'));
+  [OL,OR].forEach(h=>h.boxes.forEach((b,i)=>b.panflex=i<4?'70°':'110°'));
   return [L,R,OL,OR,SL,SR,FF];
 }
 
