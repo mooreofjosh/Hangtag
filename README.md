@@ -19,7 +19,7 @@ HANGTAG is a single-page web app. Import an L-Acoustics Soundvision file and it 
 
 Open `index.html` in Chrome, Edge, Safari or Firefox. There's nothing to install, and it works offline. Files are read in your browser and never uploaded anywhere.
 
-1. **Import & Inventory:** drop in a Soundvision file (`.xmlp`, `.xml` or zipped), or click **Load demo show** to try it out.
+1. **Import & Inventory:** drop in a **Soundvision PDF report**, or click **Load demo show** to try it out.
 2. **Hangs & Angles:** check and edit anything the importer missed. Every field can be edited, and hangs can be added, duplicated and reordered.
 3. **Printout:** print the prep sheet.
 4. **Dolly Labels:** set the boxes per dolly for each model, choose a label size (1, 2, 4 or 6 per A4 page) and print.
@@ -28,9 +28,18 @@ Your current show is remembered in the browser. Use **Save project** and **Open 
 
 ## About Soundvision files
 
-L-Acoustics doesn't publish the Soundvision file format, so HANGTAG reads the file flexibly. It looks for known L-Acoustics model names, plus fields that look like angles, bumpers or fly bars, pickup points, orientation and stacked or flown. Always check the Hangs tab before printing. The **raw data explorer** on the first tab shows everything that was found in the file.
+Soundvision project files (`.xmlp`) are encrypted, so only Soundvision can open them. Export a **report** from Soundvision instead and drop the PDF into HANGTAG. It reads each source's:
 
-The default boxes-per-dolly numbers are only starting points. Set them to match your own dollies.
+- group, name, and whether it's flown or stacked, vertical or side by side
+- fly bar and pickup hole (e.g. `L2-BAR hole A`), number of motors, pickup position and motor load
+- box models, the site of each box (from which the angles between boxes are worked out) and Panflex settings for every module
+- trim (bottom elevation), total weight and mechanical warnings
+
+Two things aren't in the report and need filling in on the Hangs tab: which way each fly bar faces, and box 1's angle to the fly bar.
+
+Site angles follow Soundvision: positive aims up.
+
+Reading PDFs uses [pdf.js](https://mozilla.github.io/pdf.js/) (Apache 2.0), bundled in `vendor/`. If `index.html` is opened on its own without that folder, HANGTAG loads pdf.js from cdnjs instead, which needs an internet connection.
 
 ## Centre of gravity
 
