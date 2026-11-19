@@ -673,9 +673,16 @@ function parseSvReport(lines){
       const v=m[1].toLowerCase(); h.config=m[1].trim();
       h.mount=/stack|ground|floor/.test(v)?'ground':/flown|fly|hang/.test(v)?'flown':'unknown';
       h.layout=/horizontal/.test(v)?'horizontal':'vertical'; continue; }
-    if((m=L.match(/^Bumper:\s*(.+)$/i))){ const b=m[1].trim(), hm=b.match(/^(.*?)\s+hole\s+(\S+)\s*$/i); if(hm){h.bumper=hm[1];h.hole=hm[2];} else h.bumper=b; continue; }
+    // "L2-BAR hole A": the letter is the bar's orientation (A = normal, B = reversed)
+    if((m=L.match(/^Bumper:\s*(.+)$/i))){ const b=m[1].trim(), hm=b.match(/^(.*?)\s+hole\s+(\S+)\s*$/i);
+      if(hm){ h.bumper=hm[1]; const o=hm[2].toUpperCase(); h.orientation = o==='A'?'Normal (front)' : o==='B'?'Reversed (rear)' : 'Hole '+hm[2]; } else h.bumper=b; continue; }
     if((m=L.match(/^#\s*motors:\s*(\d+)/i))){ h.motors=+m[1]; continue; }
-    if((m=L.match(/^(Front|Rear) pickup position[^:]*:\s*(.+)$/i))){ h.notesList.push(m[1]+' pickup: '+m[2].trim()); continue; }
+    // "Front pickup position (X; Y; Z, m): 3 (5.52; 2.14; 6.16)": 3 is the pickup hole on the bar
+    if((m=L.match(/^(Front|Rear) pickup position[^:]*:\s*(.+)$/i))){
+      const v=m[2].trim(), pm=v.match(/^(\S+)\s*\((.*)\)\s*$/), hole=pm?pm[1]:v;
+      h.pickups=h.pickups||{}; h.pickups[m[1].toLowerCase()]=hole;
+      if(pm) h.notesList.push(m[1]+' pickup position: '+pm[2]);
+      continue; }
     if((m=L.match(/^Site:\s*(-?[\d.,]+)/i))){ if(h.site==='') h.site=n(m[1]); continue; }
     if((m=L.match(/^Azimuth:\s*(-?[\d.,]+)/i))){ h.azimuth=n(m[1]); continue; }
     if((m=L.match(/^Bottom elevation:\s*(-?[\d.,]+)/i))){ h.trim=Math.round(n(m[1])*distF*100)/100; continue; }
@@ -694,6 +701,7 @@ function parseSvReport(lines){
   }
   finish();
   hangs.forEach(h=>{
+    if(h.pickups){ const f=h.pickups.front, r=h.pickups.rear; h.hole = f&&r ? f+' front, '+r+' rear' : (f||r||''); delete h.pickups; }
     const parts=[];
     if(h.group) parts.push('Group: '+h.group);
     if(h.config) parts.push(h.config);
@@ -721,7 +729,7 @@ async function importReport(file, buf){
   const nb=found.reduce((a,h)=>a+h.boxes.length,0);
   const warn=found.filter(h=>h.warnings).length;
   msg.innerHTML=`<div class="msg ok">Imported <b>${plural(found.length,'hang','hangs')}</b> with <b>${plural(nb,'box','boxes')}</b> from the Soundvision report.</div>`+
-    `<div class="msg warn">Two things aren’t in Soundvision reports: which way each fly bar faces, and box 1’s angle to the fly bar (set to 0°). Check those on the Hangs tab.${warn?' '+plural(warn,'hang has','hangs have')+' mechanical warnings from Soundvision.':''}</div>`;
+    `<div class="msg warn">Soundvision reports don’t give box 1’s angle to the fly bar, so it’s set to 0°. Check it on the Hangs tab.${warn?' '+plural(warn,'hang has','hangs have')+' mechanical warnings from Soundvision.':''}</div>`;
   save(); renderAll();
 }
 async function importFile(file){

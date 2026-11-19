@@ -31,11 +31,11 @@ Your current show is remembered in the browser. Use **Save project** and **Open 
 Soundvision project files (`.xmlp`) are encrypted, so only Soundvision can open them. Export a **report** from Soundvision instead and drop the PDF into HANGTAG. It reads each source's:
 
 - group, name, and whether it's flown or stacked, vertical or side by side
-- fly bar and pickup hole (e.g. `L2-BAR hole A`), number of motors, pickup position and motor load
+- fly bar and its direction (`L2-BAR hole A` = normal, `hole B` = reversed), the pickup hole on the bar (`Front pickup position: 3` = hole 3), number of motors and motor load
 - box models, the site of each box (from which the angles between boxes are worked out) and Panflex settings for every module
 - trim (bottom elevation), total weight and mechanical warnings
 
-Two things aren't in the report and need filling in on the Hangs tab: which way each fly bar faces, and box 1's angle to the fly bar.
+Box 1's angle to the fly bar isn't in the report, so it's set to 0°. Check it on the Hangs tab.
 
 Site angles follow Soundvision: positive aims up.
 
