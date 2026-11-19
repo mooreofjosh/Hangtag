@@ -596,19 +596,24 @@ async function importFile(file){
   msg.innerHTML='<div class="msg">Reading '+esc(file.name)+'…</div>';
   try{
     const files = await readAnyFile(file);
-    let found=[], lines=[];
+    let found=[], lines=[], unreadable=0;
     for(const f of files){
       const t=f.text.replace(/^﻿/,'').trim();
       let tree;
       if(t.startsWith('<')) tree=xmlToTree(t);
       else if(t.startsWith('{')||t.startsWith('[')) tree=jsonToTree(JSON.parse(t));
-      else continue;
+      else { unreadable++; continue; }
       lines.push('=== '+f.name+' ===', ...treeToLines(tree));
       found.push(...interpret(tree));
     }
     rawText=lines.join('\n'); renderRaw();
+    if(!found.length && unreadable && unreadable===files.length){
+      rawText=''; renderRaw();
+      msg.innerHTML='<div class="msg err"><b>This Soundvision project file is encrypted, so HANGTAG can’t read it.</b> Newer versions of Soundvision lock their project files so only Soundvision can open them. Enter the hangs by hand on the Hangs tab instead: use “Add a hang by hand” below, then type in each hang’s boxes and angles from Soundvision.</div>';
+      return;
+    }
     if(!found.length){
-      msg.innerHTML='<div class="msg err"><b>No PA boxes recognised in this file.</b> The file was read, but no L-Acoustics enclosure names were found. Open the raw data explorer below to see what is inside, and add the hangs manually on the Hangs tab. If Soundvision saved it in a binary format, export the <i>.xmlp</i> version instead.</div>';
+      msg.innerHTML='<div class="msg err"><b>No PA boxes found in this file.</b> The file opened, but it doesn’t mention any L-Acoustics box models. Check what’s inside with the raw data explorer below, then add the hangs by hand on the Hangs tab.</div>';
       return;
     }
     if(appendImport.checked) state.hangs.push(...found); else state.hangs=found;
